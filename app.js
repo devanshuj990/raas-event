@@ -61,7 +61,7 @@ Auth.initializePersistence();
 Auth.initializeAuthStateListener();
 
 // Check authentication using Firebase's onAuthStateChanged
-onAuthStateChanged(auth, (user) => {
+onAuthStateChanged(auth, async (user) => {
   // Show content once auth state is determined
   document.body.style.opacity = "1";
   
@@ -74,6 +74,22 @@ onAuthStateChanged(auth, (user) => {
 
   // User is logged in, initialize app
   console.log('✓ User authenticated, initializing app with ID:', user.uid);
+  
+  // ============================================
+  // CHECK USER ROLE AND UPDATE UI VISIBILITY
+  // ============================================
+  try {
+    const userDoc = await getDoc(doc(window.db, 'users', user.uid));
+    const userRole = userDoc.data()?.role;
+    
+    console.log('✓ User role loaded:', userRole);
+    
+    // Update role-based UI visibility
+    updateRoleBasedUI(userRole);
+  } catch (error) {
+    console.error('Error loading user role for UI:', error);
+  }
+  
   initParticles();
   loadEventsFromFirebase();
   renderUserTickets();
@@ -81,6 +97,25 @@ onAuthStateChanged(auth, (user) => {
   initScrollEffects();
   drawChart();
 });
+
+// ============================================
+// UPDATE UI BASED ON USER ROLE
+// ============================================
+function updateRoleBasedUI(role) {
+  // Show admin button only for owner
+  const adminBtn = document.getElementById('adminBtn');
+  if (adminBtn) {
+    adminBtn.style.display = role === 'owner' ? 'inline-flex' : 'none';
+    adminBtn.onclick = () => window.location.href = 'admin.html';
+  }
+  
+  // Show scanner button for scanner and owner
+  const scannerBtn = document.getElementById('scannerBtn');
+  if (scannerBtn) {
+    scannerBtn.style.display = (role === 'scanner' || role === 'owner') ? 'inline-flex' : 'none';
+    scannerBtn.onclick = () => window.location.href = 'scan.html';
+  }
+}
 
 // Load events from Firebase Firestore
 async function loadEventsFromFirebase() {

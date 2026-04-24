@@ -29,26 +29,22 @@ service cloud.firestore {
       return doc != null ? doc.role : null;
     }
     
-    // Check if user has admin access (admin OR owner)
-    function isAdmin() {
+    // Check if user has owner access (FULL SYSTEM ACCESS)
+    function isOwner() {
       let role = getUserRole();
-      return isAuth() && (role == "admin" || role == "owner");
+      return isAuth() && role == "owner";
     }
     
-    // Check if user has scanner access (scanner OR admin OR owner)
+    // Check if user has scanner access (SCANNER OR OWNER)
     function isScanner() {
       let role = getUserRole();
-      return isAuth() && (role == "scanner" || role == "admin" || role == "owner");
+      return isAuth() && (role == "scanner" || role == "owner");
     }
     
-    // Check if user is owner
-    function isOwner() {
-      return isAuth() && getUserRole() == "owner";
-    }
-    
-    // Check if user owns the document
-    function doesUserOwnDoc(userId) {
-      return request.auth.uid == userId;
+    // Check if user is regular user (USER OR OWNER)
+    function isRegularUser() {
+      let role = getUserRole();
+      return isAuth() && (role == "user" || role == "owner");
     }
     
     // ============================================
@@ -62,8 +58,8 @@ service cloud.firestore {
       allow update: if isAuth() && request.auth.uid == userId && 
         !request.resource.data.diff(resource.data).affectedKeys().has('role');
       
-      // Admins and owners can read/write all user documents
-      allow read, write: if isAdmin();
+      // Owners can read/write all user documents
+      allow read, write: if isOwner();
       
       // CRITICAL: Allow user creation during first OTP login
       // Only the authenticated user can create their own document
@@ -77,8 +73,8 @@ service cloud.firestore {
       // Users can read only their own tickets
       allow read: if isAuth() && resource.data.userId == request.auth.uid;
       
-      // Admins and owners can read all tickets
-      allow read: if isAdmin();
+      // Owners can read all tickets
+      allow read: if isOwner();
       
       // Users can create their own tickets during booking
       // CRITICAL: userId must match auth.uid, and required fields must exist
@@ -89,8 +85,8 @@ service cloud.firestore {
         request.resource.data.get('ticketType', '') is string &&
         request.resource.data.get('used', false) == false;
       
-      // Admins can update any ticket
-      allow update: if isAdmin();
+      // Owners can update any ticket
+      allow update: if isOwner();
       
       // Scanners can mark tickets as used (update only)
       allow update: if isScanner() && 
@@ -108,19 +104,19 @@ service cloud.firestore {
       // Everyone can read events
       allow read: if true;
       
-      // Only admins and owners can create/update/delete events
-      allow create, update, delete: if isAdmin();
+      // Only owners can create/update/delete events
+      allow create, update, delete: if isOwner();
     }
     
     // ============================================
     // ANALYTICS COLLECTION
     // ============================================
     match /analytics/{document=**} {
-      // Only admins and owners can read analytics
-      allow read: if isAdmin();
+      // Only owners can read analytics
+      allow read: if isOwner();
       
-      // System can write analytics
-      allow write: if isAdmin();
+      // System can write analytics (owner only)
+      allow write: if isOwner();
     }
     
     // ============================================

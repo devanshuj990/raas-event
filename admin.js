@@ -27,33 +27,48 @@ let bannerBase64 = null;
 
 // ==================== INITIALIZATION ====================
 // Set initial opacity to 0 to prevent flicker
+// Set initial opacity to 0 to prevent flicker
 document.body.style.opacity = "0";
 
-// Check authentication and admin role using Firebase's onAuthStateChanged
+// ============================================
+// PROTECT ADMIN PAGE - OWNER ONLY
+// ============================================
 onAuthStateChanged(auth, async (user) => {
   // Show content once auth state is determined
   document.body.style.opacity = "1";
   
   if (!user) {
-    console.warn('No user logged in. Redirecting to login...');
+    console.warn('❌ No user logged in. Redirecting to login...');
     window.location.href = 'login.html';
     return;
   }
 
   try {
     const userDoc = await getDoc(doc(db, 'users', user.uid));
+    
+    if (!userDoc.exists()) {
+      console.warn('❌ User document not found in Firestore');
+      window.location.href = 'login.html';
+      return;
+    }
+    
     const userRole = userDoc.data()?.role;
+    console.log('✓ User role:', userRole);
 
-    if (userRole !== 'admin' && userRole !== 'owner') {
-      console.warn('User does not have admin access. Redirecting...');
+    // ADMIN PAGE ACCESS: Only OWNER role allowed (no admin role anymore)
+    if (userRole !== 'owner') {
+      console.warn('❌ Access denied. User role:', userRole, '(Owner role required)');
+      alert('Access denied. Only owners can access the admin panel.');
       window.location.href = 'index.html';
       return;
     }
 
-    // User has admin access
+    console.log('✓ Admin access granted for owner');
+    
+    // Initialize admin interface
     initializeAdmin();
   } catch (error) {
-    console.error('Error checking admin role:', error);
+    console.error('❌ Error checking admin role:', error);
     window.location.href = 'index.html';
   }
 });

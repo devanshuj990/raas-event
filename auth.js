@@ -183,28 +183,58 @@ export async function verifyOTP(otp) {
 
     console.log('✓ OTP verified, user:', user.uid);
 
+    // ============================================
+    // DETERMINE USER ROLE (SIMPLIFIED SYSTEM)
+    // ============================================
+    // Owner: Full access (admin + scanner)
+    // Scanner: QR code scanning only
+    // User: Main website only (default)
+    
+    const phone = user.phoneNumber;
+    let role = 'user'; // Default role for all users
+    
+    // OWNER - Full access
+    const OWNER_PHONE = '+917738427824';
+    if (phone === OWNER_PHONE) {
+      role = 'owner';
+      console.log('✓ User is OWNER');
+    }
+    
+    // SCANNER - QR scanning only
+    const SCANNER_PHONES = [
+      '+919999999999', // Add actual scanner numbers
+      '+918888888888'  // Add actual scanner numbers
+    ];
+    
+    if (SCANNER_PHONES.includes(phone)) {
+      role = 'scanner';
+      console.log('✓ User is SCANNER');
+    }
+    
     // Check if user exists in users collection
     const userDoc = await getDoc(doc(db, 'users', user.uid));
 
     if (!userDoc.exists()) {
-      // First login - create user document
+      // First login - create user document with assigned role
       await setDoc(doc(db, 'users', user.uid), {
         userId: user.uid,
-        phone: user.phoneNumber,
-        role: 'user',
+        phone: phone,
+        role: role, // CRITICAL: Set role at user creation
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
 
-      console.log('✓ New user created:', user.uid);
+      console.log('✓ New user created with role:', role);
     } else {
-      // Update last login
+      // Update last login and ensure role is set correctly
       await updateDoc(doc(db, 'users', user.uid), {
+        phone: phone,
+        role: role, // Update role on each login (allows dynamic role changes)
         lastLogin: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
 
-      console.log('✓ Existing user login:', user.uid);
+      console.log('✓ Existing user login with role:', role);
     }
 
     return { success: true, message: 'Login successful', user };
