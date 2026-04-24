@@ -1,21 +1,20 @@
 ﻿﻿// ============================================
-// Firebase Initialization
+// Firebase Initialization - Import from firebase.js
 // ============================================
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, addDoc, collection, getDocs, deleteDoc, doc, updateDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBzQhNztzGFUj8rRca2i7F1w9MMzer-0c",
-  authDomain: "raas-dandiya-events-7afe1.firebaseapp.com",
-  projectId: "raas-dandiya-events-7afe1"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+import { auth, db } from "./firebase.js";
+import * as Auth from './auth.js';
+import { getDoc, doc, collection, getDocs, deleteDoc, updateDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 window.db = db;
+window.auth = auth;
+window.Auth = Auth;
 
-console.log('✓ Firebase initialized for Admin Portal');
+// Initialize persistence and auth listener
+Auth.initializePersistence();
+Auth.initializeAuthStateListener();
+
+console.log('✓ Firebase initialized for Admin Portal with Auth');
 
 // ============================================
 // Admin Portal - Event Management
@@ -27,24 +26,51 @@ let currentTicketTypes = [];
 let bannerBase64 = null;
 
 // ==================== INITIALIZATION ====================
-document.addEventListener('DOMContentLoaded', () => {
-  console.log('✓ DOM Content Loaded');
-  initializeAdmin();
+// Set initial opacity to 0 to prevent flicker
+document.body.style.opacity = "0";
+
+// Check authentication and admin role using Firebase's onAuthStateChanged
+onAuthStateChanged(auth, async (user) => {
+  // Show content once auth state is determined
+  document.body.style.opacity = "1";
   
-  // Verify form exists
-  const form = document.getElementById('createEventForm');
-  if (form) {
-    console.log('✓ Create Event Form found');
-    console.log('Form onsubmit handler:', form.onsubmit);
-  } else {
-    console.warn('⚠ Create Event Form NOT found in DOM');
+  if (!user) {
+    console.warn('No user logged in. Redirecting to login...');
+    window.location.href = 'login.html';
+    return;
+  }
+
+  try {
+    const userDoc = await getDoc(doc(db, 'users', user.uid));
+    const userRole = userDoc.data()?.role;
+
+    if (userRole !== 'admin' && userRole !== 'owner') {
+      console.warn('User does not have admin access. Redirecting...');
+      window.location.href = 'index.html';
+      return;
+    }
+
+    // User has admin access
+    initializeAdmin();
+  } catch (error) {
+    console.error('Error checking admin role:', error);
+    window.location.href = 'index.html';
   }
 });
 
+// Verify form exists
+setTimeout(() => {
+  const form = document.getElementById('createEventForm');
+  if (form) {
+    console.log('✓ Create Event Form found');
+  } else {
+    console.warn('⚠ Create Event Form NOT found in DOM');
+  }
+}, 500);
+
 function initializeAdmin() {
-  console.log('✓ DOM Content Loaded');
+  console.log('✓ Admin initialized - User has admin role');
   
-  // Always show the admin dashboard - no localStorage authentication needed
   // Load events asynchronously without blocking UI
   loadAdminEvents().catch(err => console.error('Failed to load events:', err));
   
@@ -56,50 +82,11 @@ function initializeAdmin() {
 }
 
 // ==================== AUTHENTICATION ====================
-function showAdminLogin() {
-  const adminPanel = document.querySelector('.admin-container');
-  if (!adminPanel) return;
-  
-  adminPanel.innerHTML = `
-    <div class="admin-login-container">
-      <div class="login-card">
-        <h2>Admin Portal</h2>
-        <p>Enter your credentials to continue</p>
-        
-        <form onsubmit="handleAdminLogin(event)">
-          <div class="form-group">
-            <label>Admin ID</label>
-            <input type="text" id="adminId" placeholder="admin" required>
-          </div>
-          
-          <div class="form-group">
-            <label>Password</label>
-            <input type="password" id="adminPassword" placeholder="password" required>
-          </div>
-          
-          <button type="submit" class="btn btn-primary btn-lg">Login</button>
-        </form>
-      </div>
-    </div>
-  `;
-}
-
-function handleAdminLogin(event) {
-  event.preventDefault();
-  const adminId = document.getElementById('adminId').value;
-  const password = document.getElementById('adminPassword').value;
-  
-  if (adminId === 'admin' && password === 'admin123') {
-    // Authentication successful - admin dashboard will load
-    location.reload();
-  } else {
-    alert('Invalid credentials. Use admin / admin123');
-  }
-}
-
 function logoutAdmin() {
   if (confirm('Are you sure you want to logout?')) {
-    window.location.href = 'index.html';
+    Auth.logout().then(() => {
+      window.location.href = 'index.html';
+    });
   }
 }
 
@@ -263,9 +250,13 @@ function initializeCreateForm() {
 async function handleCreateEvent(event) {
   event.preventDefault();
   console.log('✓ Create event form submitted');
-  console.log('Event object:', event);
   
   try {
+    // SECURITY: Verify admin access
+    if (window.currentRole !== 'admin' && window.currentRole !== 'owner') {
+      throw new Error('Insufficient permissions to create events');
+    }
+
     // Validate and save ticket types
     if (!saveTicketTypes()) {
       alert('Please add at least one ticket type');
@@ -282,17 +273,18 @@ async function handleCreateEvent(event) {
     const status = document.getElementById('eventStatus')?.value || 'active';
     const isFeatured = document.getElementById('isFeatured')?.checked || false;
     
-    // Validate all fields
+    // Validate all required fields
     if (!eventName || !category || !eventDate || !eventTime || !venue || !description) {
-      console.warn('Missing required fields');
-      alert('Please fill all required fields');
-      return;
+      throw new Error('Please fill in all required fields');
     }
+
+    // Validate text field lengths
+    if (eventName.length > 200) throw new Error('Event name is too long (max 200 characters)');
+    if (venue.length > 200) throw new Error('Venue name is too long (max 200 characters)');
+    if (description.length > 1000) throw new Error('Description is too long (max 1000 characters)');
     
     if (!bannerBase64) {
-      console.warn('No banner image uploaded');
-      alert('Please upload an event banner image');
-      return;
+      throw new Error('Please upload an event banner image');
     }
     
     // Validate future date
@@ -300,15 +292,21 @@ async function handleCreateEvent(event) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     if (selectedDate < today) {
-      console.warn('Past date selected');
-      alert('Please select a future date');
-      return;
+      throw new Error('Please select a future date');
     }
     
-    // Extract ticket prices
+    // Validate time format
+    if (!/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/.test(eventTime)) {
+      throw new Error('Invalid time format. Please use HH:MM');
+    }
+    
+    // Extract and validate ticket prices
     let priceSingle = 0, priceCouple = 0, priceGroup5 = 0, priceGroup10 = 0, priceGroup20 = 0;
     
     currentTicketTypes.forEach(ticket => {
+      if (ticket.price < 0) throw new Error('Ticket prices cannot be negative');
+      if (ticket.price > 999999) throw new Error('Ticket price is too high');
+      
       if (ticket.name === 'Single Pass') priceSingle = ticket.price;
       else if (ticket.name === 'Couple Pass') priceCouple = ticket.price;
       else if (ticket.name === 'Group of 5') priceGroup5 = ticket.price;
@@ -316,25 +314,13 @@ async function handleCreateEvent(event) {
       else if (ticket.name === 'Group of 20') priceGroup20 = ticket.price;
     });
     
-    console.log('Event data:', {
-      eventName,
-      eventDate,
-      eventTime,
-      venue,
-      priceSingle,
-      priceCouple,
-      priceGroup5,
-      priceGroup10,
-      priceGroup20
-    });
-    
     // Check if database is initialized
     if (!db) {
       throw new Error('Firebase database not initialized');
     }
     
-    // Save event to Firestore
-    console.log('Saving event to Firestore...');
+    // FIX: Use addDoc to generate unique ID and prevent overwrites
+    console.log('Saving event to Firestore using addDoc...');
     const docRef = await addDoc(collection(db, "events"), {
       eventName: eventName,
       eventDate: eventDate,
@@ -347,14 +333,18 @@ async function handleCreateEvent(event) {
       priceGroup20: priceGroup20,
       status: status,
       createdAt: new Date(),
+      createdBy: window.currentUserId || 'admin',
       description: description,
       category: category,
       featured: isFeatured,
       banner: bannerBase64
     });
     
-    console.log('✓ Event saved to Firestore with ID:', docRef.id);
+    if (!docRef || !docRef.id) {
+      throw new Error('Failed to create event - no document reference');
+    }
     
+    console.log('✓ Event saved successfully with unique ID:', docRef.id);
     showToast('success', 'Event Created!', eventName + ' added successfully');
     
     // Reset form
@@ -366,7 +356,8 @@ async function handleCreateEvent(event) {
     
   } catch (error) {
     console.error('Error creating event:', error);
-    alert('Error creating event: ' + error.message);
+    const errorMsg = error.message || 'An unexpected error occurred';
+    showToast('error', 'Event Creation Failed', errorMsg);
   }
 }
 
@@ -1088,10 +1079,14 @@ function exportGuestListCSV() {
   showToast('success', 'Exported', 'Guest list downloaded as CSV');
 }
 
-function closeTicketModal() {
-
+function openTicketModal() {
   const modal = document.getElementById('ticketModal');
-  if (modal) modal.style.display = 'none';
+  if (modal) modal.classList.add('active');
+}
+
+function closeTicketModal() {
+  const modal = document.getElementById('ticketModal');
+  if (modal) modal.classList.remove('active');
 }
 
 function downloadTicket() {
@@ -1104,6 +1099,58 @@ function showToast(type, title, message) {
   toast.innerHTML = `<strong>${title}</strong><p>${message}</p>`;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 3000);
+}
+
+// ==================== ROLE MANAGEMENT ====================
+/**
+ * CRITICAL SECURITY FUNCTION
+ * Assign roles to users for system access control
+ * Only admin/owner can call this function
+ * @param {string} uid - User ID from Firebase Auth
+ * @param {string} role - Role to assign: 'user' | 'scanner' | 'admin' | 'owner'
+ */
+async function updateUserRole(uid, role) {
+  // SECURITY: Verify current user is admin/owner
+  if (window.currentRole !== 'admin' && window.currentRole !== 'owner') {
+    console.error('✗ Unauthorized: Only admin/owner can assign roles');
+    showToast('error', 'Access Denied', 'You cannot assign roles');
+    return false;
+  }
+
+  // Validate role
+  const validRoles = ['user', 'scanner', 'admin', 'owner'];
+  if (!validRoles.includes(role)) {
+    console.error('✗ Invalid role:', role);
+    showToast('error', 'Invalid Role', `Role must be one of: ${validRoles.join(', ')}`);
+    return false;
+  }
+
+  // Validate UID
+  if (!uid || uid.length < 10) {
+    console.error('✗ Invalid user ID');
+    showToast('error', 'Invalid User', 'User ID is not valid');
+    return false;
+  }
+
+  try {
+    console.log(`Assigning role '${role}' to user ${uid}...`);
+    
+    // Update user document in Firestore
+    await updateDoc(doc(db, "users", uid), {
+      role: role,
+      roleUpdatedAt: new Date(),
+      roleUpdatedBy: window.currentUserId
+    });
+
+    console.log(`✓ Role updated successfully for user ${uid}: ${role}`);
+    showToast('success', 'Role Updated', `User role set to '${role}'`);
+    return true;
+
+  } catch (error) {
+    console.error('✗ Error updating user role:', error);
+    showToast('error', 'Update Failed', error.message || 'Could not update role');
+    return false;
+  }
 }
 
 console.log('✓ Admin Portal Ready');
@@ -1125,9 +1172,11 @@ window.deleteEvent = deleteEvent;
 window.changeEventStatus = changeEventStatus;
 window.loadAdminEvents = loadAdminEvents;
 window.togglePeoplePermitted = togglePeoplePermitted;
+window.openTicketModal = openTicketModal;
 window.closeTicketModal = closeTicketModal;
 window.downloadTicket = downloadTicket;
 window.showToast = showToast;
+window.updateUserRole = updateUserRole;
 window.loadAnalytics = loadAnalytics;
 window.startAnalyticsRefresh = startAnalyticsRefresh;
 window.stopAnalyticsRefresh = stopAnalyticsRefresh;

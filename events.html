@@ -44,10 +44,23 @@
         <li><a href="index.html">Home</a></li>
         <li><a href="events.html">Events</a></li>
         <li><a href="tickets.html">My Tickets</a></li>
+        <li><a href="profile.html" id="profileLink" style="display: none;">Profile</a></li>
       </ul>
       
       <div class="nav-actions">
-        <button class="btn btn-primary" onclick="window.location.href='tickets.html'">
+        <button class="btn btn-ghost" id="loginBtn" onclick="window.location.href='login.html'" style="display: none;">
+          Login
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </button>
+        <button class="btn btn-secondary" id="logoutBtn" onclick="handleLogout()" style="display: none;">
+          Logout
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+          </svg>
+        </button>
+        <button class="btn btn-primary" onclick="window.location.href='tickets.html'" id="ticketsBtn">
           My Tickets
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M2 9a3 3 0 0 1 5-2.236A3 3 0 0 1 9.5 9a3 3 0 0 0 5.196 2.236A3 3 0 0 1 17 9a3 3 0 0 1 5 2.236V15a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z"/>
@@ -240,6 +253,39 @@
     function bookEvent(eventId) {
       openEventDetails(eventId);
     }
+  </script>
+
+  <script type="module">
+    import * as Auth from './auth.js';
+    window.Auth = Auth;
+
+    // Initialize auth listener
+    Auth.initializeAuthStateListener();
+
+    // Update nav buttons based on auth state
+    window.addEventListener('authStateChanged', (event) => {
+      const { user, role } = event.detail;
+      const loginBtn = document.getElementById('loginBtn');
+      const logoutBtn = document.getElementById('logoutBtn');
+      const profileLink = document.getElementById('profileLink');
+
+      if (user) {
+        loginBtn.style.display = 'none';
+        logoutBtn.style.display = 'inline-flex';
+        profileLink.style.display = 'inline';
+      } else {
+        loginBtn.style.display = 'inline-flex';
+        logoutBtn.style.display = 'none';
+        profileLink.style.display = 'none';
+      }
+    });
+
+    window.handleLogout = async function() {
+      const result = await Auth.logout();
+      if (result.success) {
+        window.location.href = 'index.html';
+      }
+    };
   </script>
 </body>
 </html>

@@ -1,27 +1,32 @@
 // ============================================
-// Firebase Initialization
+// Firebase Initialization - Import from firebase.js
 // ============================================
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, addDoc, collection, getDocs, getDoc, doc, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBzQhNztzGFUj8rRca2i7F1w9MMzer-0c",
-  authDomain: "raas-dandiya-events-7afe1.firebaseapp.com",
-  projectId: "raas-dandiya-events-7afe1"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+import { auth, db } from "./firebase.js";
+import {
+  getFirestore,
+  addDoc,
+  collection,
+  getDocs,
+  getDoc,
+  doc,
+  updateDoc,
+  serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import * as Auth from './auth.js';
 
 // Export all Firebase functions globally
 window.db = db;
+window.auth = auth;
+window.Auth = Auth;
 window.getFirestore = getFirestore;
 window.addDoc = addDoc;
 window.collection = collection;
 window.getDocs = getDocs;
 window.getDoc = getDoc;
 window.doc = doc;
-window.setDoc = setDoc;
 window.updateDoc = updateDoc;
 
 console.log('✓ Firebase initialized with all Firestore methods');
@@ -48,7 +53,27 @@ let selectedTickets = { single: 0, couple: 0, group: 0 };
 let checkoutStep = 1;
 
 // ==================== INITIALIZATION ====================
-document.addEventListener('DOMContentLoaded', () => {
+// Set initial opacity to 0 to prevent flicker
+document.body.style.opacity = "0";
+
+// Initialize persistence and auth listeners from auth.js
+Auth.initializePersistence();
+Auth.initializeAuthStateListener();
+
+// Check authentication using Firebase's onAuthStateChanged
+onAuthStateChanged(auth, (user) => {
+  // Show content once auth state is determined
+  document.body.style.opacity = "1";
+  
+  if (!user) {
+    // Not logged in - redirect to login
+    console.log('Not logged in, redirecting to login');
+    window.location.href = 'login.html';
+    return;
+  }
+
+  // User is logged in, initialize app
+  console.log('✓ User authenticated, initializing app with ID:', user.uid);
   initParticles();
   loadEventsFromFirebase();
   renderUserTickets();
@@ -60,53 +85,62 @@ document.addEventListener('DOMContentLoaded', () => {
 // Load events from Firebase Firestore
 async function loadEventsFromFirebase() {
   try {
-    if (window.db) {
-      const querySnapshot = await getDocs(collection(window.db, "events"));
-      events = [];
-      querySnapshot.forEach((doc) => {
-        const eventData = doc.data();
-        
-        // Load all non-cancelled events (active, postponed, inactive)
-        if (eventData.status === 'cancelled') {
-          return;
-        }
-        
-        // Transform Firestore data to app format
-        const ticketTypes = [];
-        if (eventData.priceSingle) ticketTypes.push({ id: 'single', name: 'Single Pass', price: eventData.priceSingle, description: 'Entry pass' });
-        if (eventData.priceCouple) ticketTypes.push({ id: 'couple', name: 'Couple Pass', price: eventData.priceCouple, description: 'Entry pass for 2' });
-        if (eventData.priceGroup5) ticketTypes.push({ id: 'group5', name: 'Group of 5', price: eventData.priceGroup5, description: 'Entry pass for 5' });
-        if (eventData.priceGroup10) ticketTypes.push({ id: 'group10', name: 'Group of 10', price: eventData.priceGroup10, description: 'Entry pass for 10' });
-        if (eventData.priceGroup20) ticketTypes.push({ id: 'group20', name: 'Group of 20', price: eventData.priceGroup20, description: 'Entry pass for 20' });
-        
-        const basePrice = ticketTypes.length > 0 ? Math.min(...ticketTypes.map(t => t.price)) : 0;
-        
-        events.push({
-          id: doc.id,
-          title: eventData.eventName || 'Untitled Event',
-          date: eventData.eventDate || new Date().toISOString().split('T')[0],
-          time: eventData.eventTime || '00:00',
-          image: eventData.banner || eventData.image || 'https://via.placeholder.com/400x300?text=Event',
-          category: eventData.category || 'Other',
-          description: eventData.description || '',
-          venue: { name: eventData.venue || 'Venue TBD', type: 'decided' },
-          ticketTypes: ticketTypes,
-          basePrice: basePrice,
-          featured: eventData.featured || false,
-          status: eventData.status || 'active',
-          createdAt: eventData.createdAt || new Date()
-        });
-      });
-      
-      console.log('✓ Loaded', events.length, 'active events from Firestore');
-      
-      // Sort by date
-      events.sort((a, b) => new Date(a.date) - new Date(b.date));
-      
-      // Render featured and all events
-      renderFeaturedEvents();
-      renderAllEvents();
+    if (!window.db) {
+      throw new Error('Firebase database not initialized');
     }
+
+    const querySnapshot = await getDocs(collection(window.db, "events"));
+    events = [];
+    
+    querySnapshot.forEach((doc) => {
+      const eventData = doc.data();
+      const eventId = doc.id;
+      
+      // Filter: Only load active, postponed, and inactive events
+      // Hidden: cancelled events
+      if (eventData.status === 'cancelled') {
+        console.log('⊘ Skipping cancelled event:', eventId);
+        return;
+      }
+        
+      // Transform Firestore data to app format
+      const ticketTypes = [];
+      if (eventData.priceSingle) ticketTypes.push({ id: 'single', name: 'Single Pass', price: eventData.priceSingle, description: 'Entry pass' });
+      if (eventData.priceCouple) ticketTypes.push({ id: 'couple', name: 'Couple Pass', price: eventData.priceCouple, description: 'Entry pass for 2' });
+      if (eventData.priceGroup5) ticketTypes.push({ id: 'group5', name: 'Group of 5', price: eventData.priceGroup5, description: 'Entry pass for 5' });
+      if (eventData.priceGroup10) ticketTypes.push({ id: 'group10', name: 'Group of 10', price: eventData.priceGroup10, description: 'Entry pass for 10' });
+      if (eventData.priceGroup20) ticketTypes.push({ id: 'group20', name: 'Group of 20', price: eventData.priceGroup20, description: 'Entry pass for 20' });
+      
+      const basePrice = ticketTypes.length > 0 ? Math.min(...ticketTypes.map(t => t.price)) : 0;
+      const eventStatus = eventData.status || 'active';
+      
+      events.push({
+        id: eventId,
+        title: eventData.eventName || 'Untitled Event',
+        date: eventData.eventDate || new Date().toISOString().split('T')[0],
+        time: eventData.eventTime || '00:00',
+        image: eventData.banner || eventData.image || 'https://via.placeholder.com/400x300?text=Event',
+        category: eventData.category || 'Other',
+        description: eventData.description || '',
+        venue: { name: eventData.venue || 'Venue TBD', type: 'decided' },
+        ticketTypes: ticketTypes,
+        basePrice: basePrice,
+        featured: eventData.featured || false,
+        status: eventStatus,
+        createdAt: eventData.createdAt || new Date(),
+        bookingDisabled: eventStatus === 'inactive',
+        isPostponed: eventStatus === 'postponed'
+      });
+    });
+    
+    console.log('✓ Loaded', events.length, 'active events from Firestore');
+    
+    // Sort by date
+    events.sort((a, b) => new Date(a.date) - new Date(b.date));
+    
+    // Render featured and all events
+    renderFeaturedEvents();
+    renderAllEvents();
   } catch (error) {
     console.error('Error loading events from Firebase:', error);
     // Fallback to empty events
@@ -501,6 +535,22 @@ function proceedToCheckout() {
     showToast('error', 'No Tickets Selected', 'Please select at least one ticket');
     return;
   }
+
+  // CRITICAL: Verify user is authenticated before allowing checkout
+  const user = auth.currentUser;
+  if (!user) {
+    showToast('error', 'Login Required', 'Please login to book tickets');
+    setTimeout(() => {
+      window.location.href = 'login.html';
+    }, 1500);
+    return;
+  }
+  
+  // CRITICAL: Verify window.currentUserId is set (auth state initialized)
+  if (!window.currentUserId) {
+    showToast('error', 'Authentication Error', 'Please wait for authentication to complete');
+    return;
+  }
   
   checkoutStep = 1;
   renderCheckout();
@@ -631,6 +681,22 @@ async function processPayment(total) {
     return;
   }
 
+  // CRITICAL: Verify user is still authenticated
+  const user = auth.currentUser;
+  if (!user) {
+    showToast('error', 'Authentication Lost', 'Your session expired. Please login again.');
+    setTimeout(() => {
+      window.location.href = 'login.html';
+    }, 1500);
+    return;
+  }
+
+  // CRITICAL: Verify window.currentUserId is set
+  if (!window.currentUserId) {
+    showToast('error', 'Authentication Error', 'User ID not initialized. Please refresh and try again.');
+    return;
+  }
+
   // Show loading state
   showToast('info', 'Processing', 'Creating your tickets...');
 
@@ -646,7 +712,15 @@ async function processPayment(total) {
     }, 1500);
   } catch (error) {
     console.error('❌ Error creating tickets:', error);
-    showToast('error', 'Error', 'Failed to create tickets');
+    
+    // Handle specific Firebase permission errors
+    if (error.message.includes('Missing or insufficient permissions')) {
+      showToast('error', 'Permission Error', 'Unable to save tickets. Please try again.');
+    } else if (error.message.includes('not authenticated')) {
+      showToast('error', 'Authentication Error', 'Please login and try again.');
+    } else {
+      showToast('error', 'Error', error.message || 'Failed to create tickets');
+    }
   }
 }
 
@@ -666,43 +740,108 @@ async function generateAndSaveTickets(name, email, phone, totalAmount) {
   const generatedTickets = [];
   let ticketsCreated = 0;
 
+  // CRITICAL SECURITY: Verify user is authenticated from BOTH sources
+  const user = auth.currentUser;
+  if (!user || !window.currentUserId) {
+    console.error('✗ Security Error: No authenticated user');
+    console.error('  - auth.currentUser:', user?.uid || 'null');
+    console.error('  - window.currentUserId:', window.currentUserId || 'null');
+    throw new Error('User not authenticated');
+  }
+  
+  // Verify IDs match
+  if (user.uid !== window.currentUserId) {
+    console.error('✗ Security Error: User ID mismatch');
+    throw new Error('Authentication state mismatch');
+  }
+
   try {
     for (const typeId of Object.keys(selectedTickets)) {
       const quantity = selectedTickets[typeId];
 
       if (quantity > 0) {
         const type = selectedEvent.ticketTypes.find(t => t.id === typeId);
+        if (!type) throw new Error('Invalid ticket type selected');
 
         for (let i = 0; i < quantity; i++) {
-          const uniqueTicketId = 'TKT' + Date.now() + Math.random().toString(36).substr(2, 9);
-
+          // CRITICAL: Generate unique ticketId BEFORE creating document
+          // Format: TKT_userId_timestamp_counter (ensures uniqueness and queryability)
+          const generatedTicketId = `TKT_${user.uid.slice(-6)}_${Date.now()}_${i}`;
+          
+          // Create ticket object with complete information
+          // MANDATORY: Always include userId for Firestore security rules
           const ticket = {
-            ticketId: uniqueTicketId,
+            ticketId: generatedTicketId, // MUST be string for Firestore rules
+            userId: user.uid, // CRITICAL: Use auth.currentUser.uid for reliability
             eventId: selectedEvent.id,
             eventTitle: selectedEvent.title,
             eventName: selectedEvent.title,
             eventDate: selectedEvent.date,
             eventTime: selectedEvent.time,
             venue: selectedEvent.venue?.name || 'Venue TBD',
-            ticketType: type.name,
+            ticketType: type.name, // MUST be string for Firestore rules
             price: type.price,
             customerName: name,
             customerEmail: email,
-            customerPhone: phone,
-            used: false,
-            createdAt: new Date().toISOString(),
-            purchaseDate: new Date().toISOString(),
-            qrData: uniqueTicketId,
+            customerPhone: phone || user.phoneNumber || '',
+            used: false, // MUST be false for Firestore rules
+            usedAt: null,
+            createdAt: serverTimestamp(),
+            purchaseDate: serverTimestamp(),
+            qrData: generatedTicketId, // Use same ID for QR code
             status: 'active'
           };
+          
+          // Validate ticket object has required fields for Firestore rules
+          if (!ticket.userId || !ticket.eventId || !ticket.ticketType || !ticket.ticketId) {
+            throw new Error('Incomplete ticket data: missing userId, eventId, ticketType, or ticketId');
+          }
+          
+          if (typeof ticket.ticketId !== 'string' || typeof ticket.ticketType !== 'string') {
+            throw new Error('ticketId and ticketType must be strings');
+          }
+          
+          if (ticket.used !== false) {
+            throw new Error('Ticket must have used: false');
+          }
 
-          // Save to Firebase using setDoc
+          // FIX: Use addDoc to ensure unique ID and prevent overwrites
           try {
-            await setDoc(doc(db, "tickets", uniqueTicketId), ticket);
-            console.log('✓ Ticket saved to Firebase:', uniqueTicketId);
+            // Verify Firestore connection before creating ticket
+            if (!window.db) {
+              throw new Error('Firebase database not initialized');
+            }
+            
+            // Create ticket with full data (no need for update after)
+            const docRef = await addDoc(collection(window.db, "tickets"), ticket);
+            const firestoreDocId = docRef.id;
+            
+            console.log('✓ Ticket created in Firebase');
+            console.log('  - Ticket ID:', ticket.ticketId);
+            console.log('  - Firestore Doc ID:', firestoreDocId);
+            console.log('  - User ID:', ticket.userId);
+            console.log('  - Event ID:', ticket.eventId);
+            
           } catch (firebaseError) {
             console.error('✗ Error saving ticket to Firebase:', firebaseError);
-            throw firebaseError;
+            console.error('  - Error code:', firebaseError.code);
+            console.error('  - Error message:', firebaseError.message);
+            console.error('  - Ticket data:', {
+              userId: ticket.userId,
+              eventId: ticket.eventId,
+              ticketId: ticket.ticketId,
+              ticketType: ticket.ticketType,
+              used: ticket.used
+            });
+            
+            // Provide helpful error messages
+            if (firebaseError.code === 'permission-denied') {
+              throw new Error('Permission denied: Unable to create tickets. Ensure you are logged in.');
+            } else if (firebaseError.message.includes('not initialized')) {
+              throw new Error('Database connection error. Please try again.');
+            } else {
+              throw new Error(`Failed to save ticket ${i + 1}: ${firebaseError.message}`);
+            }
           }
 
           generatedTickets.push(ticket);
@@ -711,11 +850,15 @@ async function generateAndSaveTickets(name, email, phone, totalAmount) {
       }
     }
 
+    if (ticketsCreated === 0) {
+      throw new Error('No tickets were selected');
+    }
+
     console.log('✓ All tickets created successfully:', ticketsCreated);
   } catch (error) {
     console.error('✗ Error generating tickets:', error);
-    showToast('error', 'Error Creating Tickets', error.message);
-    return;
+    showToast('error', 'Error Creating Tickets', error.message || 'An unexpected error occurred');
+    throw error;
   }
 
   // Tickets are saved to Firebase

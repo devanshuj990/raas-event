@@ -133,23 +133,36 @@
   </div>
 
   <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import { getFirestore, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { auth, db } from './firebase.js';
+    import * as Auth from './auth.js';
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    
+    window.auth = auth;
+    window.db = db;
+    window.Auth = Auth;
 
-    const firebaseConfig = {
-      apiKey: "AIzaSyBzQhNztzGFUj8rRca2i7F1w9MMzer-0c",
-      authDomain: "raas-dandiya-events-7afe1.firebaseapp.com",
-      projectId: "raas-dandiya-events-7afe1"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+    // Initialize persistence and auth listener
+    Auth.initializePersistence();
+    Auth.initializeAuthStateListener();
 
     let currentFilterTab = 'upcoming';
     let currentTicketId = null;
     let allTickets = [];
 
-    document.addEventListener('DOMContentLoaded', () => {
+    // Set initial opacity to 0 to prevent flicker
+    document.body.style.opacity = "0";
+
+    // Check authentication using Firebase's onAuthStateChanged
+    onAuthStateChanged(auth, (user) => {
+      // Show content once auth state is determined
+      document.body.style.opacity = "1";
+      
+      if (!user) {
+        window.location.href = 'login.html';
+        return;
+      }
+
+      // User is logged in, initialize page
       initParticles();
       loadAndDisplayTickets();
     });
@@ -170,18 +183,11 @@
 
     async function loadAndDisplayTickets() {
       try {
-        console.log('📥 Loading tickets from Firebase...');
-        const snapshot = await getDocs(collection(db, "tickets"));
-        allTickets = [];
+        // Get only user's tickets
+        const userTickets = await Auth.getUserTickets();
+        allTickets = userTickets;
 
-        snapshot.forEach(doc => {
-          allTickets.push({
-            id: doc.id,
-            ...doc.data()
-          });
-        });
-
-        console.log('✓ Loaded', allTickets.length, 'tickets from Firebase');
+        console.log('✓ Loaded', allTickets.length, 'tickets for user:', window.currentUserId);
         displayUserTickets();
       } catch (error) {
         console.error('❌ Error loading tickets:', error);

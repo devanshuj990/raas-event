@@ -1,19 +1,20 @@
 // ============================================
-// Firebase Initialization
+// Firebase Initialization - Import from firebase.js
 // ============================================
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, getDocs, collection, updateDoc, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBzQhNztzGFUj8rRca2i7F1w9MMzer-0c",
-  authDomain: "raas-dandiya-events-7afe1.firebaseapp.com",
-  projectId: "raas-dandiya-events-7afe1"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+import { auth, db } from "./firebase.js";
+import { getDocs, collection, updateDoc, doc, getDoc, where, query } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import * as Auth from './auth.js';
 
 window.db = db;
+window.auth = auth;
+window.Auth = Auth;
+
+// Initialize persistence and auth listener
+Auth.initializePersistence();
+Auth.initializeAuthStateListener();
+
+console.log('✓ Firebase initialized for Scanner Application');
 
 // ============================================
 // Ticket Scanner Application
@@ -27,10 +28,42 @@ let animationId = null;
 let flashEnabled = false;
 
 // ==================== INITIALIZATION ====================
-document.addEventListener('DOMContentLoaded', () => {
-  initParticles();
+// Set initial opacity to 0 to prevent flicker
+document.body.style.opacity = "0";
+
+// Check authentication and scanner role using Firebase's onAuthStateChanged
+onAuthStateChanged(auth, async (user) => {
+  // Show content once auth state is determined
+  document.body.style.opacity = "1";
   
-  // Setup modal button event listeners
+  if (!user) {
+    console.warn('No user logged in. Redirecting to login...');
+    window.location.href = 'login.html';
+    return;
+  }
+
+  try {
+    const userDoc = await getDoc(doc(db, 'users', user.uid));
+    const userRole = userDoc.data()?.role;
+
+    if (userRole !== 'scanner' && userRole !== 'admin' && userRole !== 'owner') {
+      console.warn('User does not have scanner access. Redirecting...');
+      window.location.href = 'index.html';
+      return;
+    }
+
+    console.log('✓ User has scanner access with role:', userRole);
+    initParticles();
+    
+    // Setup modal button event listeners
+    setupModalEventListeners();
+  } catch (error) {
+    console.error('Error checking scanner role:', error);
+    window.location.href = 'index.html';
+  }
+});
+
+function setupModalEventListeners() {
   const modalCloseBtn = document.querySelector('#scanResultModal .modal-close');
   const scanAgainBtn = document.querySelector('#scanResultModal .btn-secondary');
   
@@ -47,11 +80,16 @@ document.addEventListener('DOMContentLoaded', () => {
   if (manualForm) {
     manualForm.addEventListener('submit', processManualEntry);
   }
-});
+}
 
 // ==================== PARTICLES ====================
 function initParticles() {
   const container = document.getElementById('particles');
+  if (!container) {
+    console.warn('Particles container not found');
+    return;
+  }
+  
   for (let i = 0; i < 50; i++) {
     const particle = document.createElement('div');
     particle.className = 'particle';
@@ -295,11 +333,29 @@ function processManualEntry(event) {
 
 // ==================== TICKET VALIDATION ====================
 async function validateAndDisplayTicket(qrData) {
-  try {
-    console.log('🔍 Searching for ticket:', qrData);
+  // SECURITY: Validate input
+  if (!qrData || typeof qrData !== 'string') {
+    console.error('✗ Invalid ticket data');
+    showScanResult(false, "❌ Invalid Input", `
+      <div class="ticket-display">
+        <p>Invalid ticket data provided.</p>
+        <p style="font-size: 12px; color: #999; margin-top: 15px;">Please try again.</p>
+      </div>
+    `);
+    return;
+  }
 
-    // First try direct lookup by ticketId
-    const ticketRef = doc(db, "tickets", qrData);
+  try {
+    const trimmedData = qrData.trim();
+    console.log('🔍 Searching for ticket:', trimmedData);
+
+    // Validate Firebase database connection
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    // STRATEGY 1: Direct lookup by document ID (fastest)
+    const ticketRef = doc(db, "tickets", trimmedData);
     let ticketSnap = await getDoc(ticketRef);
 
     let found = null;
@@ -308,20 +364,26 @@ async function validateAndDisplayTicket(qrData) {
       found = { id: ticketSnap.id, ...ticketSnap.data() };
       console.log('✓ Found ticket via direct lookup');
     } else {
-      // If not found via direct lookup, search through all tickets
-      console.log('⚠ Not found via direct lookup, searching collection...');
-      const snapshot = await getDocs(collection(db, "tickets"));
-
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.ticketId === qrData || data.qrData === qrData) {
-          found = { id: doc.id, ...data };
-        }
-      });
+      // STRATEGY 2: Search by ticketId or qrData fields if direct lookup fails
+      console.log('⚠ Not found via direct lookup, searching by fields...');
+      try {
+        const snapshot = await getDocs(collection(db, "tickets"));
+        
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          // Match either ticketId or qrData fields
+          if (data.ticketId === trimmedData || data.qrData === trimmedData) {
+            found = { id: doc.id, ...data };
+          }
+        });
+      } catch (searchError) {
+        console.error('Error searching collection:', searchError);
+      }
     }
 
+    // VALIDATE: Ticket found
     if (!found) {
-      console.warn('❌ Ticket not found in database:', qrData);
+      console.warn('❌ Ticket not found in database:', trimmedData);
       showScanResult(false, "❌ Ticket not found", `
         <div class="ticket-display">
           <p>This ticket QR code is not registered in the system.</p>
@@ -331,29 +393,59 @@ async function validateAndDisplayTicket(qrData) {
       return;
     }
 
-    // Check if ticket is still valid (not used)
-    if (found.used === true) {
-      console.warn('⚠ Ticket already used:', found.id);
-      showScanResult(false, "⚠️ Already Used", `
+    // VALIDATE: Ticket data completeness
+    if (!found.customerName || !found.ticketType) {
+      console.error('✗ Incomplete ticket data:', found.id);
+      showScanResult(false, "⚠️ Data Error", `
         <div class="ticket-display">
-          <p style="color: #ff6b6b; font-weight: 600;">This ticket has already been used.</p>
-          <p><strong>Customer:</strong> ${found.customerName || 'N/A'}</p>
-          <p style="margin-top: 15px; font-size: 12px;">Only one entry per ticket is allowed.</p>
+          <p>Ticket data is incomplete.</p>
+          <p style="font-size: 12px; color: #999; margin-top: 15px;">Please contact support.</p>
         </div>
       `);
       return;
     }
 
-    // Mark ticket as used in Firebase
+    // VALIDATE: Check if ticket is still valid (not used)
+    if (found.used === true) {
+      console.warn('⚠ Ticket already used:', found.id);
+      const usedTime = found.usedAt ? new Date(found.usedAt).toLocaleString('en-IN') : 'Unknown time';
+      showScanResult(false, "⚠️ Already Used", `
+        <div class="ticket-display">
+          <p style="color: #ff6b6b; font-weight: 600;">This ticket has already been used.</p>
+          <p><strong>Customer:</strong> ${found.customerName}</p>
+          <p style="font-size: 12px; color: #999; margin-top: 15px;">Used at: ${usedTime}</p>
+        </div>
+      `);
+      return;
+    }
+
+    // VALIDATE: Check ticket status
+    if (found.status === 'cancelled') {
+      console.warn('⚠ Ticket is cancelled:', found.id);
+      showScanResult(false, "❌ Cancelled Ticket", `
+        <div class="ticket-display">
+          <p style="color: #ff6b6b; font-weight: 600;">This ticket has been cancelled.</p>
+          <p style="font-size: 12px; color: #999; margin-top: 15px;">Please contact support.</p>
+        </div>
+      `);
+      return;
+    }
+
+    // CRITICAL: Mark ticket as used in Firebase
     try {
+      const now = new Date();
       await updateDoc(doc(db, "tickets", found.id), {
         used: true,
-        usedAt: new Date().toISOString(),
-        scannedTime: new Date().toISOString()
+        usedAt: now.toISOString(),
+        scannedTime: now.toISOString(),
+        scannerUserId: window.currentUserId || 'unknown'
       });
-      console.log('✓ Ticket marked as used');
+      console.log('✓ Ticket marked as used successfully');
     } catch (updateError) {
-      console.error('⚠ Error updating ticket status:', updateError);
+      console.error('✗ Critical Error updating ticket status:', updateError);
+      // FAIL-SAFE: Still show success to user but log the error
+      // This ensures the user isn't blocked from entry due to a write failure
+      console.warn('⚠ Write failed but allowing entry due to timeout. Admin must manually verify.');
     }
 
     // Show success
